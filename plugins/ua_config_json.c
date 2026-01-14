@@ -55,6 +55,116 @@ static UA_ByteString
 loadCertificateFile(const char *const path);
 #endif
 
+/*----------------------Type Utils------------------------*/
+
+typedef struct {
+    int enumValue;
+    char const *enumJsonName;
+} EnumValueDescription;
+
+static UA_StatusCode
+parseEnumType(ParsingCtx *ctx, void *field, EnumValueDescription const *enumValueDescriptions, size_t enumValueDescriptionsSize) {
+    cj5_token tok = ctx->tokens[++ctx->index];
+    switch (tok.type) {
+    case CJ5_TOKEN_STRING: {
+        char *field_str = (char*)UA_malloc(tok.size + 1);
+        unsigned int str_len = 0;
+        // TODO improvement: provide a version that can get a read-only string and a length
+        cj5_get_str(&ctx->result, (unsigned int)ctx->index, field_str, &str_len);
+
+        bool enumValueFound = false;
+        for (size_t enumValueIndex = 0; enumValueIndex < enumValueDescriptionsSize; enumValueIndex++) {
+            EnumValueDescription const *enumValueDescription = &enumValueDescriptions[enumValueIndex];
+
+            // TODO improvement: allow case-insensitive comparison?
+            if(strcmp(field_str, enumValueDescription->enumJsonName) == 0) {
+                // enums are forced to be 32 bit
+                *((UA_Int32 *) field) = enumValueDescription->enumValue;
+                enumValueFound = true;
+                break;
+            }
+        }
+        if(!enumValueFound) {
+            UA_LOG_ERROR(ctx->logging, UA_LOGCATEGORY_APPLICATION, "Unknown field name.");
+        }
+        UA_free(field_str);
+        break;
+    }
+    default:
+        break;
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
+typedef struct {
+    char const *fieldJsonName;
+    size_t fieldByteOffset;
+    size_t sizeFieldByteOffset;
+    parseJsonSignature parseFunction;
+} FieldDescription;
+
+static UA_StatusCode
+parseStructType(ParsingCtx *ctx, void *field, FieldDescription *fieldDescriptions, size_t fieldDescriptionsSize)
+{
+    uint8_t *fieldBytePtr = (uint8_t *)field;
+    cj5_token tok = ctx->tokens[++ctx->index];
+    for(size_t j = tok.size/2; j > 0; j--) {
+        tok = ctx->tokens[++ctx->index];
+        switch (tok.type) {
+        case CJ5_TOKEN_STRING: {
+            char *field_str = (char*)UA_malloc(tok.size + 1);
+            unsigned int str_len = 0;
+            cj5_get_str(&ctx->result, (unsigned int)ctx->index, field_str, &str_len);
+
+            bool fieldFound = false;
+            for (size_t fieldIndex = 0; fieldIndex < fieldDescriptionsSize; fieldIndex++) {
+                FieldDescription *fieldDescription = &fieldDescriptions[fieldIndex];
+
+                if(strcmp(field_str, fieldDescription->fieldJsonName) == 0) {
+                    fieldDescription->parseFunction(ctx, fieldBytePtr + fieldDescriptions->fieldByteOffset,
+                                                    (size_t *)(fieldBytePtr + fieldDescriptions->sizeFieldByteOffset));
+                    fieldFound = true;
+                    break;
+                }
+            }
+            if(!fieldFound) {
+                UA_LOG_ERROR(ctx->logging, UA_LOGCATEGORY_APPLICATION, "Unknown field name.");
+            }
+            UA_free(field_str);
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return UA_STATUSCODE_GOOD;
+}
+
+FieldDescription const endpointDescriptionFields[] = {
+    { "endpointUrl", offsetof(UA_EndpointDescription, endpointUrl), 0, StringField_parseJson },
+    { "server", offsetof(UA_EndpointDescription, server), 0, ApplicationDescriptionField_parseJson },
+    //{ "serverCertificate", offsetof(UA_EndpointDescription, serverCertificate), 0, ByteString_parseJson },
+    //{ "securityMode", offsetof(UA_EndpointDescription, securityMode), 0, MessageSecurityMode_parseJson },
+    { "securityPolicyUri", offsetof(UA_EndpointDescription, securityPolicyUri), 0, StringField_parseJson },
+    //{ "userIdentityTokens", offsetof(UA_EndpointDescription, userIdentityTokens), 0, UserTokenPolicyArray_parseJson },
+    //{ "transportProfileUri", offsetof(UA_EndpointDescription, transportProfileUri), 0, StringField_parseJson },
+};
+/*
+PARSE_JSON(ApplicationTypeField) {
+    static EnumValueDescription const applicationTypeEnumValues[] = {
+        { UA_APPLICATIONTYPE_SERVER, "server" },
+        { UA_APPLICATIONTYPE_CLIENT, "client" },
+        { UA_APPLICATIONTYPE_CLIENTANDSERVER, "clientandserver" },
+        { UA_APPLICATIONTYPE_DISCOVERYSERVER, "discoveryserver" },
+    };
+
+    // TODO refactor sizeof array calculation
+    return parseEnumType(ctx, configField, applicationTypeEnumValues, sizeof(applicationTypeEnumValues) / sizeof(EnumValueDescription const));
+}
+*/
+// UA_decodeJson(string, &applicationDescription, &UATYPES[UA_TYPES_APPLICATIONDESCRIPTION]);
+//
+
 /*----------------------Basic Types------------------------*/
 PARSE_JSON(Int64Field) {
     cj5_token tok = ctx->tokens[++ctx->index];
@@ -813,6 +923,7 @@ PARSE_JSON(SecurityPkiField) {
 #endif
     return UA_STATUSCODE_GOOD;
 }
+
 PARSE_JSON(RuleHandlingField) {
     UA_UInt32 enum_value;
     UA_StatusCode retval = UInt32Field_parseJson(ctx, &enum_value, NULL);
