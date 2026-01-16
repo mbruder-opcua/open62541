@@ -13,3 +13,6 @@
 	path = deps/nodesetLoader
 	url = https://github.com/open62541/nodesetLoader
 	branch = master
+[submodule "deps/mdns"]
+	path = deps/mdns
+	url = https://github.com/mjansson/mdns
